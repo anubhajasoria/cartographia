@@ -1,0 +1,135 @@
+@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Outfit:wght@300;400;500;600;700&display=swap');
+@import "tailwindcss";
+
+body {
+  background: #070d1a;
+  color: #e2e8f0;
+  font-family: 'Outfit', sans-serif;
+  margin: 0;
+}
+.light body, .light { background: #f0f4f8; color: #1a2332; }
+
+@theme {
+  --font-serif: 'Instrument Serif', serif;
+  --font-sans: 'Outfit', sans-serif;
+
+  --color-bg: #070d1a;
+  --color-sf: #0e1729;
+  --color-sf2: #152036;
+  --color-bd: #1e2d4a;
+  --color-tx: #e2e8f0;
+  --color-tx2: #94a3b8;
+  --color-ok: #10b981;
+  --color-ok-g: rgba(16,185,129,.4);
+  --color-ac: #f59e0b;
+  --color-ac2: #fbbf24;
+  --color-err: #ef4444;
+  --color-country: #162240;
+  --color-cs: #1e3355;
+  --color-blue: #60a5fa;
+}
+
+/* Light theme overrides */
+.light {
+  --color-bg: #f0f4f8;
+  --color-sf: #ffffff;
+  --color-sf2: #e8edf2;
+  --color-bd: #c8d4e0;
+  --color-tx: #1a2332;
+  --color-tx2: #5a6a7d;
+  --color-country: #d0dbe8;
+  --color-cs: #a8b8ca;
+}
+.light .map-wrap svg.world { background: radial-gradient(ellipse at 50% 40%,#dce6f0,#f0f4f8) !important; }
+.light .ocean-label { fill: rgba(80,120,170,0.25) !important; }
+.light .cp { fill: var(--color-country); stroke: var(--color-cs); }
+.light .cp:hover { fill: #bccde0; stroke: #6080a0; }
+.light .grat { stroke: #c0cede; }
+.light .sph { stroke: #a0b4cc; }
+
+/* ── Keyframe Animations ── */
+@keyframes shake { 0%,100%{transform:translateX(0)} 20%,60%{transform:translateX(-6px)} 40%,80%{transform:translateX(6px)} }
+@keyframes msgLife { 0%{opacity:0;transform:scale(.85) translateY(-4px)} 8%{opacity:1;transform:scale(1) translateY(0)} 80%{opacity:1} 100%{opacity:0} }
+@keyframes cpop { 0%{fill:#fff;stroke-width:3;filter:drop-shadow(0 0 16px var(--color-ac2))} 30%{fill:var(--color-ac2);filter:drop-shadow(0 0 10px var(--color-ac2))} 100%{fill:var(--color-ok);stroke-width:.6;filter:none} }
+@keyframes dpop { 0%{r:10;fill:#fff;filter:drop-shadow(0 0 12px var(--color-ac2))} 40%{fill:var(--color-ac2)} 100%{r:4;fill:var(--color-ok);filter:none} }
+@keyframes flashIn { 0%{opacity:0;transform:translateY(6px) scale(.7)} 60%{transform:translateY(-2px) scale(1.05)} 100%{opacity:1;transform:translateY(0) scale(1)} }
+@keyframes flashOut { 0%{opacity:1} 100%{opacity:0;transform:translateY(-6px)} }
+@keyframes sp { 0%{opacity:1;r:0} 50%{opacity:1} 100%{opacity:0;r:6} }
+@keyframes fi { from{opacity:0} to{opacity:1} }
+@keyframes mi { from{transform:scale(.92) translateY(16px);opacity:0} to{transform:scale(1) translateY(0);opacity:1} }
+@keyframes tin { from{transform:scale(0);opacity:0} to{transform:scale(1);opacity:1} }
+@keyframes spin { to{transform:rotate(360deg)} }
+@keyframes introExit { 0%{opacity:1;transform:scale(1)} 100%{opacity:0;transform:scale(1.15)} }
+@keyframes gameEnter { 0%{opacity:0;transform:scale(.97)} 100%{opacity:1;transform:scale(1)} }
+@keyframes floatDrift { 0%{transform:translateY(0) translateX(0)} 25%{transform:translateY(-15px) translateX(10px)} 50%{transform:translateY(-5px) translateX(-8px)} 75%{transform:translateY(-20px) translateX(5px)} 100%{transform:translateY(0) translateX(0)} }
+@keyframes globeSpin { 0%{transform:rotateY(0deg)} 100%{transform:rotateY(360deg)} }
+@keyframes ringPulse { 0%,100%{transform:scale(1);opacity:.5} 50%{transform:scale(1.08);opacity:1} }
+@keyframes letterIn { 0%{opacity:0;transform:translateY(40px) rotateX(40deg)} 100%{opacity:1;transform:translateY(0) rotateX(0)} }
+@keyframes fadeUp { 0%{opacity:0;transform:translateY(16px)} 100%{opacity:1;transform:translateY(0)} }
+@keyframes btnShine { 0%{transform:translateX(-100%)} 30%{transform:translateX(100%)} 100%{transform:translateX(100%)} }
+
+/* Animation utility classes */
+.animate-shake { animation: shake .4s ease-in-out; }
+.animate-msg-pop { animation: msgLife 5s ease-out forwards; }
+.animate-game-enter { animation: gameEnter .6s ease-out; }
+.animate-intro-exit { animation: introExit .8s ease-in forwards; }
+.animate-fi { animation: fi .2s; }
+.animate-mi { animation: mi .3s ease-out; }
+
+/* ── SVG Map Styles (can't be Tailwind) ── */
+.cp { fill: var(--color-country); stroke: var(--color-cs); stroke-width: .4; transition: fill .5s, stroke .3s; cursor: pointer; }
+.cp:hover { fill: #1e3460; stroke: #2a4a7a; }
+.cp.found { fill: var(--color-ok); stroke: #064e3b; stroke-width: .5; }
+.cp.found:hover { fill: #34d399; stroke: #064e3b; stroke-width: .5; filter: drop-shadow(0 0 4px rgba(16,185,129,.7)); }
+.cp.terr-found { fill: #60a5fa; stroke: #1e3a5f; stroke-width: .5; }
+.cp.terr-found:hover { fill: #7db8fc; stroke: #1e3a5f; stroke-width: .5; filter: drop-shadow(0 0 4px rgba(96,165,250,.7)); }
+.cp.just { animation: cpop 1.2s ease-out forwards; }
+.grat { fill: none; stroke: #152540; stroke-width: .3; stroke-dasharray: 2,3; }
+.sph { fill: none; stroke: #1a2d50; stroke-width: .8; }
+.ocean-label { font-family: 'Outfit', sans-serif; font-size: 7px; fill: rgba(100,155,210,0.35); text-anchor: middle; letter-spacing: .35em; font-weight: 300; pointer-events: none; }
+.dot { cursor: pointer; transition: fill .4s; }
+.dot.found { fill: var(--color-ok) !important; stroke: #059669 !important; }
+.dot.found:hover { fill: #34d399 !important; }
+.dot.just { animation: dpop 1.2s ease-out forwards; }
+.flash-g { pointer-events: none; animation: flashIn .5s ease-out, flashOut .8s 2.2s ease-in forwards; }
+.flash-pill { fill: rgba(245,158,11,.95); rx: 5; }
+.flash-text { font-family: 'Outfit', sans-serif; font-weight: 700; font-size: 8px; fill: #000; text-anchor: middle; }
+.sparkle { opacity: 0; animation: sp .8s ease-out forwards; pointer-events: none; }
+
+/* ── Toggle Switch ── */
+.toggle input { display: none; }
+.toggle input:checked + .toggle-track { background: var(--color-ok); border-color: var(--color-ok); }
+.toggle input:checked ~ .toggle-thumb { left: 23px; }
+
+/* ── Tooltip ── */
+.map-tooltip::after { content: ''; position: absolute; left: 50%; bottom: -5px; transform: translateX(-50%); border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 5px solid var(--color-ok); }
+.map-tooltip.unfound { border-color: var(--color-tx2); color: var(--color-tx2); font-style: italic; }
+.map-tooltip.unfound::after { border-top-color: var(--color-tx2); }
+
+/* ── Play Button Shine ── */
+.play-btn::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg,transparent,rgba(255,255,255,.15),transparent); transform: translateX(-100%); animation: btnShine 3s ease-in-out infinite 2s; }
+
+/* ── Floating Names ── */
+.float-name { position: absolute; color: rgba(255,255,255,.04); font-family: 'Outfit', sans-serif; font-weight: 300; white-space: nowrap; animation: floatDrift linear infinite; }
+
+/* ── Intro Title Letters ── */
+.intro-title span { display: inline-block; opacity: 0; animation: letterIn .5s ease-out forwards; background: linear-gradient(135deg,#e2e8f0 0%,#f59e0b 50%,#10b981 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+
+/* ── Found bar tag animation ── */
+.ft { animation: tin .3s ease-out; }
+
+/* ── Scrollbar ── */
+.facts-list::-webkit-scrollbar { width: 4px; }
+.facts-list::-webkit-scrollbar-track { background: transparent; }
+.facts-list::-webkit-scrollbar-thumb { background: var(--color-bd); border-radius: 4px; }
+
+/* ── Facts panel color override ── */
+.fact-item:has(.fact-name[style]) .fact-name { color: #60a5fa; }
+
+/* ── Map wrap SVG ── */
+.map-wrap svg.world { width: 100%; height: 100%; background: radial-gradient(ellipse at 50% 40%,#0f1f3d,#070d1a); cursor: grab; display: block; touch-action: none; }
+.map-wrap svg.world:active { cursor: grabbing; }
+
+/* ── Found bar transition ── */
+.found-bar { overflow: hidden; transition: max-height .4s ease; max-height: 0; }
+.found-bar.open { max-height: 160px; overflow-y: auto; }
