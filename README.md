@@ -1,16 +1,36 @@
-# React + Vite
+# Cartographia
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A browser geography game: **can you name every country on Earth?** Type country
+names against a live world map, track your progress across 197 countries and 32
+territories, and race the clock in challenge mode — solo or head-to-head in
+real-time multiplayer.
 
-Currently, two official plugins are available:
+![Cartographia — main menu](docs/screenshot.png)
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Highlights
 
-## React Compiler
+- **Interactive world map** rendered with **D3** on real GeoJSON map data — type a
+  country and watch it fill in on the map.
+- **Solo, Challenge, and Multiplayer** modes, with a leaderboard.
+- **Real-time multiplayer** and progress tracking backed by **Firebase**.
+- Fuzzy name matching so spelling variants and alternate names still count.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Tech
 
-## Expanding the ESLint configuration
+React · TypeScript · Vite · D3 · Firebase · Tailwind CSS
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+## Run it
+
+Requires Node 18+.
+
+```bash
+npm install
+npm run dev      # start the dev server, open the printed localhost URL
+npm run build    # production build
+npm run preview  # serve the production build locally
+```
+
+## Status
+
+In active development — core gameplay, scoring, and the multiplayer loop are
+working; content and polish ongoing.
