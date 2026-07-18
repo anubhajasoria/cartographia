@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import * as d3 from "d3";
-import { db } from './firebase';
+import { db, functions } from './firebase';
 import { ref, set, get, update, remove, onValue, off, onDisconnect } from 'firebase/database';
+import { httpsCallable } from 'firebase/functions';
 
 /* ── Levenshtein distance for fuzzy matching ── */
 function levenshtein(a,b){
@@ -174,6 +175,18 @@ export default function WorldQuiz(){
   const multiTimerRef=useRef(null);
   const prevRoomStatus=useRef(null);
   const myPlayerConnRef=useRef(null);
+
+  /* ── Challenge / Leaderboard ── */
+  const [isChallenge,setIsChallenge]=useState(false);
+  const [challengeComplete,setChallengeComplete]=useState(false);
+  const [challengeDNF,setChallengeDNF]=useState(false);
+  const [lbEntries,setLbEntries]=useState([]);
+  const [lbLoading,setLbLoading]=useState(false);
+  const [showLeaderboard,setShowLeaderboard]=useState(false);
+  const [challengeSubmitName,setChallengeSubmitName]=useState('');
+  const [challengeSubmitStatus,setChallengeSubmitStatus]=useState('');
+  const [submitting,setSubmitting]=useState(false);
+  const savedSettings=useRef(null);
 
   const projection=useMemo(()=>d3.geoNaturalEarth1().scale(155).translate([W/2,H/2]),[]);
   const pathGen=useMemo(()=>d3.geoPath(projection),[projection]);
@@ -355,6 +368,35 @@ export default function WorldQuiz(){
     clearInterval(multiTimerRef.current);
   },[]);
 
+  const loadLeaderboard=useCallback(async()=>{
+    setLbLoading(true);
+    try{
+      const snap=await get(ref(db,'leaderboard'));
+      const arr=snap.exists()
+        ?Object.entries(snap.val()).map(([id,e])=>({id,...e})).sort((a,b)=>a.time-b.time).slice(0,10)
+        :[];
+      setLbEntries(arr);
+    }catch(e){}
+    setLbLoading(false);
+  },[]);
+
+  /* Tab-away = DNF in challenge mode */
+  useEffect(()=>{
+    if(!isChallenge||!started||challengeComplete||challengeDNF)return;
+    const onHide=()=>{if(document.hidden){setPlaying(false);setChallengeDNF(true);}};
+    document.addEventListener('visibilitychange',onHide);
+    return()=>document.removeEventListener('visibilitychange',onHide);
+  },[isChallenge,started,challengeComplete,challengeDNF]);
+
+  /* Challenge completion — all countries + all territories */
+  useEffect(()=>{
+    if(!isChallenge||!started||challengeComplete||challengeDNF)return;
+    if(found.size===TOTAL&&foundTerr.size===TERR_TOTAL){
+      setPlaying(false);setChallengeComplete(true);loadLeaderboard();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[found.size,foundTerr.size]);
+
   /* Register presence — sets connected=true and auto-clears to false on disconnect */
   const setupPresence=useCallback((code)=>{
     const connRef=ref(db,`rooms/${code}/players/${myId}/connected`);
@@ -531,7 +573,7 @@ export default function WorldQuiz(){
     const centroid=getCentroid(id);
     if(centroid&&settings.autoZoom)flyTo(centroid[0],centroid[1]);
     showFlashLabel(id);
-    if(next.size===TOTAL){
+    if(next.size===TOTAL&&!isChallenge){
       setPlaying(false);
       flash(`🎉 ALL ${TOTAL} COUNTRIES in ${fmt(seconds)}! Geography master!`,"complete");
       if(settings.autoZoom)setTimeout(resetZoom,1500);
@@ -539,7 +581,7 @@ export default function WorldQuiz(){
       flash(`${getFlag(id)} ${ID_NAME[id]} found!  (${next.size}/${TOTAL})`,"success");
     }
     setInput("");inputRef.current?.focus();
-  },[input,found,foundTerr,geo,playing,seconds,nameToId,getCentroid,flyTo,resetZoom,showFlashLabel,showFlashLabelAt,projection,settings,gameMode,room,myId]);
+  },[input,found,foundTerr,geo,playing,seconds,nameToId,getCentroid,flyTo,resetZoom,showFlashLabel,showFlashLabelAt,projection,settings,gameMode,room,myId,isChallenge]);
 
   const handleReset=()=>{
     setFound(new Set());setFoundTerr(new Set());setInput("");flash("","");setSeconds(0);
@@ -614,6 +656,7 @@ export default function WorldQuiz(){
   };
 
   const handleHome=()=>{
+    endChallengeCleanup();
     if(myPlayerConnRef.current){
       try{onDisconnect(myPlayerConnRef.current).cancel();}catch(e){}
       myPlayerConnRef.current=null;
@@ -737,6 +780,78 @@ export default function WorldQuiz(){
     if(room?.code)navigator.clipboard.writeText(room.code).catch(()=>{});
   },[room?.code]);
 
+  /* ── Challenge handlers ── */
+  const startChallenge=useCallback(()=>{
+    savedSettings.current={...settings};
+    setSettings(s=>({...s,difficulty:'hard',hintsEnabled:false,includeTerritories:true,clickToFill:false,autoZoom:true}));
+    setIsChallenge(true);setChallengeDNF(false);setChallengeComplete(false);
+    setChallengeSubmitName('');setChallengeSubmitStatus('');setSubmitting(false);
+    setFound(new Set());setFoundTerr(new Set());setFactsLog([]);setSeconds(0);setLastFound(null);
+    setShowLeaderboard(false);
+    setIntroExit(true);
+    setTimeout(()=>{setGameMode('solo');setStarted(true);},800);
+  },[settings]);
+
+  const endChallengeCleanup=useCallback(()=>{
+    setIsChallenge(false);setChallengeComplete(false);setChallengeDNF(false);
+    if(savedSettings.current){setSettings(savedSettings.current);savedSettings.current=null;}
+  },[]);
+
+  const loadRazorpay=()=>new Promise(resolve=>{
+    if(window.Razorpay){resolve(true);return;}
+    const s=document.createElement('script');
+    s.src='https://checkout.razorpay.com/v1/checkout.js';
+    s.onload=()=>resolve(true);s.onerror=()=>resolve(false);
+    document.body.appendChild(s);
+  });
+
+  const handleChallengePayment=useCallback(async()=>{
+    if(!challengeSubmitName.trim()){setChallengeSubmitStatus('Enter your name first');return;}
+    const loaded=await loadRazorpay();
+    if(!loaded){setChallengeSubmitStatus('Payment service unavailable. Try again.');return;}
+    setSubmitting(true);
+    setChallengeSubmitStatus('');
+    let orderId;
+    try{
+      const result=await httpsCallable(functions,'createOrder')();
+      orderId=result.data.orderId;
+    }catch(e){
+      setChallengeSubmitStatus('Could not create order. Try again.');
+      setSubmitting(false);
+      return;
+    }
+    setSubmitting(false);
+    const options={
+      key:import.meta.env.VITE_RAZORPAY_KEY_ID,
+      amount:9900,
+      currency:'INR',
+      order_id:orderId,
+      name:'Cartographia',
+      description:'World Record Board — Listing Fee',
+      handler:async(response)=>{
+        setSubmitting(true);
+        try{
+          await httpsCallable(functions,'verifyAndSaveScore')({
+            orderId:response.razorpay_order_id,
+            paymentId:response.razorpay_payment_id,
+            signature:response.razorpay_signature,
+            name:challengeSubmitName.trim(),
+            time:seconds,
+          });
+          setChallengeSubmitStatus('success');
+          await loadLeaderboard();
+        }catch(e){
+          setChallengeSubmitStatus(`Verification failed. Keep your payment ID: ${response.razorpay_payment_id}`);
+        }
+        setSubmitting(false);
+      },
+      prefill:{name:challengeSubmitName.trim()},
+      theme:{color:'#f59e0b'},
+      modal:{ondismiss:()=>setChallengeSubmitStatus('Payment cancelled.')},
+    };
+    new window.Razorpay(options).open();
+  },[challengeSubmitName,seconds,loadLeaderboard]);
+
   /* Random country names for floating background */
   const floatingNames=useMemo(()=>{
     const names=Object.values(ID_NAME);
@@ -815,21 +930,37 @@ export default function WorldQuiz(){
             </button>
           </div>
 
-          <p className="opacity-0 text-[.7rem] text-tx2 mt-4 font-light tracking-wide" style={{animation:'fadeUp .5s ease-out 1.8s forwards'}}>Type country names · Track your progress · Learn as you go</p>
+          <div className="opacity-0 flex gap-2.5" style={{animation:'fadeUp .5s ease-out 1.65s forwards'}}>
+            <button className="px-6 py-2.5 rounded-[14px] border-none cursor-pointer font-sans text-[.88rem] font-bold text-white tracking-wide bg-gradient-to-br from-ac to-amber-600 transition-all duration-300 hover:-translate-y-[2px] hover:shadow-[0_6px_20px_rgba(245,158,11,.35)]" onClick={startChallenge}>
+              🏆 Challenge
+            </button>
+            <button className="px-6 py-2.5 rounded-[14px] border border-bd bg-transparent cursor-pointer font-sans text-[.88rem] font-semibold text-tx2 tracking-wide transition-all duration-300 hover:border-tx2 hover:text-tx" onClick={async()=>{setShowLeaderboard(true);await loadLeaderboard();}}>
+              📊 Leaderboard
+            </button>
+          </div>
+
+          <p className="opacity-0 text-[.7rem] text-tx2 mt-3 font-light tracking-wide" style={{animation:'fadeUp .5s ease-out 1.9s forwards'}}>Type country names · Track your progress · Learn as you go</p>
 
           <button onClick={()=>setShowSettings(true)}
-            className="opacity-0 mt-3 bg-transparent border border-bd text-tx2 px-5 py-2 rounded-[10px] cursor-pointer font-sans text-[.78rem] transition-all duration-200 flex items-center gap-1.5 hover:border-tx2 hover:text-tx"
-            style={{animation:'fadeUp .5s ease-out 2s forwards'}}>
+            className="opacity-0 mt-2 bg-transparent border border-bd text-tx2 px-5 py-2 rounded-[10px] cursor-pointer font-sans text-[.78rem] transition-all duration-200 flex items-center gap-1.5 hover:border-tx2 hover:text-tx"
+            style={{animation:'fadeUp .5s ease-out 2.1s forwards'}}>
             ⚙ Settings
           </button>
         </div>
       ) : started ? (
       <div className="h-screen flex flex-col overflow-hidden animate-game-enter">
+        {isChallenge&&(
+          <div className="shrink-0 bg-gradient-to-r from-amber-600/20 via-amber-500/15 to-amber-600/20 border-b border-amber-500/30 px-4 py-1.5 flex items-center justify-center gap-2">
+            <span className="text-[.65rem] font-bold uppercase tracking-[.12em] text-amber-400">🏆 Challenge Mode</span>
+            <span className="text-[.58rem] text-amber-400/60">·</span>
+            <span className="text-[.58rem] text-amber-400/70">Hard · No hints · All {TOTAL} countries + {TERR_TOTAL} territories · Tab away = disqualified</span>
+          </div>
+        )}
         <div className="px-6 pt-2 text-center shrink-0 relative">
           <button className="absolute left-4 top-1/2 -translate-y-1/2 bg-transparent border border-bd text-tx2 w-8 h-8 rounded-lg cursor-pointer flex items-center justify-center text-base transition-all duration-200 hover:border-ac hover:text-ac" onClick={handleHome} title="Back to Home">←</button>
           <h1 className="font-serif text-[1.8rem] -tracking-wide leading-[1.3] pt-0.5 bg-gradient-to-br from-slate-200 via-ac to-ok bg-clip-text text-transparent">Cartographia</h1>
           <p className="hidden">Name every country on Earth · {TOTAL} to find</p>
-          <button className="absolute right-4 top-1/2 -translate-y-1/2 bg-transparent border border-bd text-tx2 w-8 h-8 rounded-lg cursor-pointer flex items-center justify-center text-base transition-all duration-200 hover:border-ac hover:text-ac hover:rotate-45" onClick={()=>setShowSettings(true)} title="Settings">⚙</button>
+          {!isChallenge&&<button className="absolute right-4 top-1/2 -translate-y-1/2 bg-transparent border border-bd text-tx2 w-8 h-8 rounded-lg cursor-pointer flex items-center justify-center text-base transition-all duration-200 hover:border-ac hover:text-ac hover:rotate-45" onClick={()=>setShowSettings(true)} title="Settings">⚙</button>}
         </div>
 
         <div className="flex items-end justify-center gap-7 px-6 pt-3.5 pb-1.5 shrink-0 max-sm:gap-4 max-sm:px-3 max-sm:py-0.5">
@@ -1086,12 +1217,12 @@ export default function WorldQuiz(){
         )}
 
         <div className="flex justify-center gap-1.5 px-6 py-[3px] pb-2 flex-wrap shrink-0">
-          <button className="px-3.5 py-[7px] rounded-[10px] cursor-pointer font-sans text-[.78rem] font-semibold transition-all duration-250 flex items-center gap-1 whitespace-nowrap bg-sf2 text-tx2 border border-bd hover:border-ac hover:text-ac" onClick={handleReset}>↺ Reset</button>
-          <button className="px-3.5 py-[7px] rounded-[10px] cursor-pointer font-sans text-[.78rem] font-semibold transition-all duration-250 flex items-center gap-1 whitespace-nowrap bg-sf2 text-tx2 border border-bd hover:border-ac hover:text-ac" onClick={revealOne}>👁 Reveal Country</button>
-          {settings.includeTerritories&&<button className="px-3.5 py-[7px] rounded-[10px] cursor-pointer font-sans text-[.78rem] font-semibold transition-all duration-250 flex items-center gap-1 whitespace-nowrap bg-sf2 border hover:border-ac hover:text-ac" style={{borderColor:"rgba(96,165,250,.3)",color:"#60a5fa"}} onClick={revealTerritory}>👁 Reveal Territory</button>}
+          {!isChallenge&&<button className="px-3.5 py-[7px] rounded-[10px] cursor-pointer font-sans text-[.78rem] font-semibold transition-all duration-250 flex items-center gap-1 whitespace-nowrap bg-sf2 text-tx2 border border-bd hover:border-ac hover:text-ac" onClick={handleReset}>↺ Reset</button>}
+          {!isChallenge&&<button className="px-3.5 py-[7px] rounded-[10px] cursor-pointer font-sans text-[.78rem] font-semibold transition-all duration-250 flex items-center gap-1 whitespace-nowrap bg-sf2 text-tx2 border border-bd hover:border-ac hover:text-ac" onClick={revealOne}>👁 Reveal Country</button>}
+          {!isChallenge&&settings.includeTerritories&&<button className="px-3.5 py-[7px] rounded-[10px] cursor-pointer font-sans text-[.78rem] font-semibold transition-all duration-250 flex items-center gap-1 whitespace-nowrap bg-sf2 border hover:border-ac hover:text-ac" style={{borderColor:"rgba(96,165,250,.3)",color:"#60a5fa"}} onClick={revealTerritory}>👁 Reveal Territory</button>}
           {factsLog.length>0&&<button className="px-3.5 py-[7px] rounded-[10px] cursor-pointer font-sans text-[.78rem] font-semibold transition-all duration-250 flex items-center gap-1 whitespace-nowrap bg-sf2 text-tx2 border border-bd hover:border-ac hover:text-ac" onClick={()=>setShowFacts(true)}>📖 Facts ({factsLog.length})</button>}
           {gameMode==='multi'&&isHost&&room?.status==='playing'&&<button className="px-3.5 py-[7px] rounded-[10px] cursor-pointer font-sans text-[.78rem] font-semibold transition-all duration-250 flex items-center gap-1 whitespace-nowrap border border-red-500/50 text-red-400 hover:bg-red-500/10 hover:border-red-400" onClick={endGame}>■ End Game</button>}
-          {gameMode!=='multi'&&<button className="px-3.5 py-[7px] rounded-[10px] border-none cursor-pointer font-sans text-[.78rem] font-semibold transition-all duration-250 flex items-center gap-1 whitespace-nowrap bg-gradient-to-br from-amber-500 to-amber-600 text-white hover:-translate-y-px hover:shadow-[0_4px_12px_rgba(245,158,11,.3)]" onClick={()=>setShowCoffee(true)}>☕ Buy Me a Coffee</button>}
+          {gameMode!=='multi'&&!isChallenge&&<button className="px-3.5 py-[7px] rounded-[10px] border-none cursor-pointer font-sans text-[.78rem] font-semibold transition-all duration-250 flex items-center gap-1 whitespace-nowrap bg-gradient-to-br from-amber-500 to-amber-600 text-white hover:-translate-y-px hover:shadow-[0_4px_12px_rgba(245,158,11,.3)]" onClick={()=>setShowCoffee(true)}>☕ Buy Me a Coffee</button>}
         </div>
 
         {showCoffee&&(
@@ -1162,6 +1293,103 @@ export default function WorldQuiz(){
                 })()}
               </div>
               <button className="w-full mt-4 py-2.5 rounded-xl border border-bd bg-transparent text-tx2 font-sans text-[.85rem] cursor-pointer transition-all duration-200 hover:border-tx2 hover:text-tx" onClick={()=>{setShowFacts(false);setFactsSearch('');}}>Close</button>
+            </div>
+          </div>
+        )}
+        {/* ── Challenge DNF overlay ── */}
+        {isChallenge&&challengeDNF&&(
+          <div className="fixed inset-0 bg-black/88 backdrop-blur-md flex items-center justify-center z-50 animate-fi">
+            <div className="bg-sf border border-bd rounded-[20px] p-7 max-w-[380px] w-[92%] text-center animate-mi flex flex-col gap-4">
+              <div className="text-[3rem]">🚫</div>
+              <h2 className="font-serif text-[1.6rem] text-red-400">Challenge Disqualified</h2>
+              <p className="text-[.82rem] text-tx2">You left the screen. The challenge requires your full attention — no tab switching.</p>
+              <div className="bg-sf2 border border-bd rounded-[12px] px-4 py-2.5 text-left">
+                <div className="text-[.6rem] text-tx2 uppercase tracking-[.1em] mb-1">Progress before exit</div>
+                <div className="text-[.82rem] text-tx">{found.size}/{TOTAL} countries · {foundTerr.size}/{TERR_TOTAL} territories</div>
+              </div>
+              <div className="flex gap-2">
+                <button className="flex-1 py-2.5 rounded-[10px] border-none cursor-pointer font-sans text-[.85rem] font-bold text-white bg-gradient-to-br from-ac to-amber-600 hover:-translate-y-px transition-all duration-200" onClick={()=>{handleHome();setTimeout(startChallenge,50);}}>Try Again</button>
+                <button className="flex-1 py-2.5 rounded-[10px] border border-bd text-tx2 cursor-pointer font-sans text-[.85rem] hover:border-tx2 hover:text-tx transition-all duration-200" onClick={handleHome}>Home</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Challenge complete overlay ── */}
+        {isChallenge&&challengeComplete&&(
+          <div className="fixed inset-0 bg-black/88 backdrop-blur-md flex items-center justify-center z-50 animate-fi">
+            <div className="bg-sf border border-bd rounded-[20px] p-7 max-w-[460px] w-[92%] animate-mi flex flex-col gap-4 max-h-[92vh] overflow-y-auto">
+              <div className="text-center">
+                <div className="text-[3rem]">🏆</div>
+                <h2 className="font-serif text-[1.8rem] mt-1 bg-gradient-to-br from-ac to-ac2 bg-clip-text text-transparent">Challenge Complete!</h2>
+                <div className="font-mono text-[2.8rem] font-bold text-ok mt-1 tabular-nums">{fmt(seconds)}</div>
+                <p className="text-[.72rem] text-tx2 mt-0.5">All {TOTAL} countries + {TERR_TOTAL} territories</p>
+              </div>
+
+              {lbLoading?(
+                <div className="text-center text-tx2 text-[.82rem] py-2">Checking leaderboard…</div>
+              ):(()=>{
+                const rank=lbEntries.filter(e=>e.time<seconds).length+1;
+                const inTop10=lbEntries.length<10||seconds<=(lbEntries[9]?.time??Infinity);
+                return(
+                  <>
+                    {inTop10?(
+                      <div className="bg-ok/10 border border-ok/30 rounded-[12px] p-3 text-center">
+                        <p className="text-ok text-[.88rem] font-semibold">
+                          {lbEntries.length===0?'🌟 First record on the board!':rank===1?'🥇 New #1 worldwide!':` You'd rank #${rank} worldwide!`}
+                        </p>
+                      </div>
+                    ):(
+                      <div className="bg-sf2 border border-bd rounded-[12px] p-3 text-center">
+                        <p className="text-tx2 text-[.82rem]">Top 10 cutoff: {fmt(lbEntries[9].time)}</p>
+                        <p className="text-tx2 text-[.72rem] mt-0.5">Keep practicing!</p>
+                      </div>
+                    )}
+
+                    {inTop10&&challengeSubmitStatus!=='success'&&(
+                      <div className="flex flex-col gap-2">
+                        <input value={challengeSubmitName} onChange={e=>setChallengeSubmitName(e.target.value)}
+                          placeholder="Your display name for the leaderboard"
+                          className="w-full px-3.5 py-2 rounded-[10px] border border-bd bg-bg text-tx text-[.88rem] font-sans outline-none focus:border-ac transition-all duration-300 placeholder:text-tx2"/>
+                        {challengeSubmitStatus&&challengeSubmitStatus!=='success'&&(
+                          <p className="text-[.75rem] text-red-400">{challengeSubmitStatus}</p>
+                        )}
+                        <button onClick={handleChallengePayment} disabled={submitting}
+                          className="py-2.5 rounded-[10px] border-none cursor-pointer font-sans text-[.9rem] font-bold text-white bg-gradient-to-br from-ac to-amber-600 hover:-translate-y-px transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed">
+                          {submitting?'Saving…':'🏆 Submit Record — ₹99'}
+                        </button>
+                        <p className="text-[.6rem] text-tx2/60 text-center">Non-refundable listing fee · Supports India &amp; international cards/UPI · Powered by Razorpay</p>
+                      </div>
+                    )}
+
+                    {challengeSubmitStatus==='success'&&(
+                      <div className="bg-ok/10 border border-ok/30 rounded-[12px] p-3 text-center">
+                        <p className="text-ok font-semibold text-[.88rem]">🎉 Record saved to the leaderboard!</p>
+                      </div>
+                    )}
+
+                    {lbEntries.length>0&&(
+                      <div className="bg-sf2 border border-bd rounded-[12px] p-3.5">
+                        <div className="text-[.58rem] font-bold uppercase tracking-[.1em] text-tx2 mb-2">Current Top {lbEntries.length}</div>
+                        <div className="flex flex-col gap-1.5">
+                          {lbEntries.map((e,i)=>(
+                            <div key={e.id} className="flex items-center gap-2">
+                              <span className="text-base w-5 shrink-0 text-center">{i===0?'🥇':i===1?'🥈':i===2?'🥉':null}</span>
+                              {i>2&&<span className="text-[.65rem] text-tx2 w-5 shrink-0 text-right">{i+1}.</span>}
+                              <span className="text-[.78rem] text-tx font-medium truncate flex-1">{e.name}</span>
+                              <span className="text-[.75rem] font-mono font-bold text-ok">{fmt(e.time)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
+
+              <button onClick={handleHome} className="py-2 rounded-[10px] border border-bd text-tx2 cursor-pointer font-sans text-[.82rem] hover:border-tx2 hover:text-tx transition-all duration-200">
+                Back to Home
+              </button>
             </div>
           </div>
         )}
@@ -1449,6 +1677,48 @@ export default function WorldQuiz(){
             </div>
 
             <button className="w-full mt-4 py-2.5 rounded-xl border border-bd bg-transparent text-tx2 font-sans text-[.85rem] cursor-pointer transition-all duration-200 hover:border-tx2 hover:text-tx" onClick={()=>setShowSettings(false)}>Done</button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Leaderboard modal (from landing page) ── */}
+      {showLeaderboard&&(
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center z-250 animate-fi" onClick={()=>setShowLeaderboard(false)}>
+          <div className="bg-sf border border-bd rounded-[20px] p-7 max-w-[440px] w-[92%] animate-mi flex flex-col gap-4 max-h-[88vh] overflow-y-auto" onClick={e=>e.stopPropagation()}>
+            <div className="text-center">
+              <div className="text-[2.8rem]">🏆</div>
+              <h2 className="font-serif text-[1.8rem] mt-1 text-tx">World Record Board</h2>
+              <p className="text-[.72rem] text-tx2 mt-1">Fastest to name all {TOTAL} countries + {TERR_TOTAL} territories<br/>Hard mode · No hints · No tab switching</p>
+            </div>
+
+            {lbLoading?(
+              <div className="text-center text-tx2 py-6 text-[.85rem]">Loading…</div>
+            ):lbEntries.length===0?(
+              <div className="text-center text-tx2 py-6">
+                <p className="text-[.9rem]">No records yet.</p>
+                <p className="text-[.78rem] mt-1 opacity-60">Be the first to set a world record!</p>
+              </div>
+            ):(
+              <div className="bg-sf2 border border-bd rounded-[14px] p-4 flex flex-col gap-2">
+                {lbEntries.map((e,i)=>(
+                  <div key={e.id} className="flex items-center gap-2.5">
+                    <span className="text-lg w-7 shrink-0 text-center">{i===0?'🥇':i===1?'🥈':i===2?'🥉':null}</span>
+                    {i>2&&<span className="text-[.68rem] text-tx2 w-7 shrink-0 text-right font-mono">{i+1}.</span>}
+                    <span className="text-[.85rem] text-tx font-medium truncate flex-1">{e.name}</span>
+                    <span className="text-[.85rem] font-mono font-bold text-ok">{fmt(e.time)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <button onClick={()=>{setShowLeaderboard(false);startChallenge();}}
+              className="py-2.5 rounded-[12px] border-none cursor-pointer font-sans text-[.9rem] font-bold text-white bg-gradient-to-br from-ac to-amber-600 hover:-translate-y-px hover:shadow-[0_6px_20px_rgba(245,158,11,.3)] transition-all duration-200">
+              🏆 Take the Challenge
+            </button>
+            <button onClick={()=>setShowLeaderboard(false)}
+              className="py-2 rounded-[10px] border border-bd text-tx2 cursor-pointer font-sans text-[.82rem] hover:border-tx2 hover:text-tx transition-all duration-200">
+              Close
+            </button>
           </div>
         </div>
       )}
